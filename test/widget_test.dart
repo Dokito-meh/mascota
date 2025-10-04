@@ -1,31 +1,45 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// Basic Flutter widget test adaptado a la app actual.
+// - Inicializa timezones para poder crear MascotaVirtualApp con la hora de Chile.
+// - Hace un smoke test: monta la app, espera que construya y verifica
+//   que exista el NavigationBar y que se pueda cambiar de pestaña.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:mascota/main.dart';
+import 'package:timezone/data/latest.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MascotaVirtualApp());
+  // Asegura binding e inicializa zonas horarias UNA sola vez.
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUpAll(() {
+    tz.initializeTimeZones();
+  });
 
+  testWidgets('App smoke test: build + nav funciona', (WidgetTester tester) async {
+    // Localización de Chile para el constructor requerido.
+    final cl = tz.getLocation('America/Santiago');
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    // Monta la app (sin const, porque recibe parámetros dinámicos).
+    await tester.pumpWidget(MascotaVirtualApp(chileLocation: cl));
+    await tester.pumpAndSettle();
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    // La app debería construir y mostrar un NavigationBar.
+    expect(find.byType(MaterialApp), findsOneWidget);
+    expect(find.byType(NavigationBar), findsOneWidget);
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // Navega entre pestañas tocando los destinos (si los labels son visibles).
+    // Intentamos tocar por icono para asegurar compatibilidad con Material 3.
+    await tester.tap(find.byIcon(Icons.storefront_outlined)); // Tienda
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.nightlight_round)); // Dormir
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.pets)); // Mascota
+    await tester.pumpAndSettle();
+
+    // Si quieres, puedes añadir más expectativas específicas de tu UI aquí.
   });
 }

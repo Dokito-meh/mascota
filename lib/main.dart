@@ -1,211 +1,175 @@
-import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:flutter/material.dart';
+
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
+import 'package:timezone/data/latest.dart' as tz;
+import 'package:timezone/timezone.dart' as tz;
+
 import 'models.dart';
 import 'mascota_page.dart';
 import 'tienda_page.dart';
 import 'dormir_page.dart';
 
-void main() {
-  runApp(const MascotaVirtualApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Firebase
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  final auth = FirebaseAuth.instance;
+  if (auth.currentUser == null) {
+    await auth.signInAnonymously();
+  }
+
+  // Ping de prueba a Firestore (puedes quitarlo luego)
+  await FirebaseFirestore.instance.collection('diagnostics').doc('ping').set(
+    {
+      'lastPing': FieldValue.serverTimestamp(),
+      'uid': auth.currentUser?.uid,
+      'origin': 'flutter',
+    },
+    SetOptions(merge: true),
+  );
+
+  // Timezone Chile
+  tz.initializeTimeZones();
+  final chile = tz.getLocation('America/Santiago');
+
+  runApp(MascotaVirtualApp(chileLocation: chile));
 }
 
 class MascotaVirtualApp extends StatelessWidget {
-  const MascotaVirtualApp({super.key});
+  final tz.Location chileLocation;
+  const MascotaVirtualApp({super.key, required this.chileLocation});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Mi Mascota Virtual',
+      title: 'Mascota Virtual',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.purple),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.pink,
+          primary: Colors.pink,
+        ),
         useMaterial3: true,
       ),
-      home: const MainNavigator(),
-      debugShowCheckedModeBanner: false,
+      home: HomeShell(chileLocation: chileLocation),
     );
   }
 }
 
-// Navegador principal con pestañas y scroll lateral
-class MainNavigator extends StatefulWidget {
-  const MainNavigator({super.key});
+class HomeShell extends StatefulWidget {
+  final tz.Location chileLocation;
+  const HomeShell({super.key, required this.chileLocation});
 
   @override
-  State<MainNavigator> createState() => _MainNavigatorState();
+  State<HomeShell> createState() => _HomeShellState();
 }
 
-class _MainNavigatorState extends State<MainNavigator> {
-  int _currentIndex = 0;
-  int _monedas = 50;
-  List<ComidaItem> _inventario = [];
-  late PageController _pageController;
-  
-  // Sistema de tiempo y sueño
-  DateTime _horaActual = DateTime.now();
-  Timer? _timerHora;
+class _HomeShellState extends State<HomeShell> {
+  int _index = 0;
+
+  // Estado global simple de la app
+  int _monedas = 500; // monedas iniciales
+  final List<ComidaItem> _inventario = [];
   bool _mascotaDurmiendo = false;
-  bool _esHoraDormir = false;
+
+  // Hora Chile
+  late Timer _horaTimer;
+  String _horaActual = '--:--';
 
   @override
   void initState() {
     super.initState();
-    _pageController = PageController(initialPage: _currentIndex);
-    _iniciarTimerHora();
-    _verificarHoraDormir();
+    _actualizarHora(); // set inicial
+    _horaTimer = Timer.periodic(const Duration(minutes: 1), (_) => _actualizarHora());
   }
 
   @override
   void dispose() {
-    _pageController.dispose();
-    _timerHora?.cancel();
+    _horaTimer.cancel();
     super.dispose();
   }
 
-  void _iniciarTimerHora() {
-    _timerHora = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() {
-        _horaActual = DateTime.now();
-      });
-      _verificarHoraDormir();
-    });
+  void _actualizarHora() {
+    final nowChile = tz.TZDateTime.now(widget.chileLocation);
+    final h = nowChile.hour.toString().padLeft(2, '0');
+    final m = nowChile.minute.toString().padLeft(2, '0');
+    setState(() => _horaActual = '$h:$m');
   }
 
-  void _verificarHoraDormir() {
-    final hora = _horaActual.hour;
-    final nuevaEsHoraDormir = hora >= 22 || hora < 6;
-    
-    if (nuevaEsHoraDormir != _esHoraDormir) {
-      setState(() {
-        _esHoraDormir = nuevaEsHoraDormir;
-        
-        if (_esHoraDormir && !_mascotaDurmiendo) {
-          // Es hora de dormir, cambiar automáticamente a vista de dormir
-          _mascotaDurmiendo = true;
-          _onBottomNavTapped(2); // Ir a pestaña de dormir
-        } else if (!_esHoraDormir && _mascotaDurmiendo) {
-          // Es hora de despertar, volver a vista principal
-          _mascotaDurmiendo = false;
-          _onBottomNavTapped(0); // Ir a pestaña principal
-        }
-      });
+  bool get _esHoraDormir {
+    final nowChile = tz.TZDateTime.now(widget.chileLocation);
+    final h = nowChile.hour;
+    // De 22:00 a 07:59 se considera hora de dormir
+    return (h >= 22 || h < 8);
+  }
+
+  // Callbacks compartidos
+  void _onMonedasChanged(int v) => setState(() => _monedas = v);
+
+  void _onComidaComprada(ComidaItem c) {
+    setState(() => _inventario.add(c));
+  }
+
+  void _onComidaUsada(ComidaItem c) {
+    // elimina la primera coincidencia (una unidad)
+    final idx = _inventario.indexWhere((x) => x.nombre == c.nombre && x.imagen == c.imagen);
+    if (idx != -1) {
+      setState(() => _inventario.removeAt(idx));
     }
   }
 
-  String _formatearHora() {
-    final hora = _horaActual.hour.toString().padLeft(2, '0');
-    final minuto = _horaActual.minute.toString().padLeft(2, '0');
-    return '$hora:$minuto';
-  }
-
-  void _actualizarMonedas(int nuevasMonedas) {
-    setState(() {
-      _monedas = nuevasMonedas;
-    });
-  }
-
-  void _agregarComida(ComidaItem comida) {
-    setState(() {
-      _inventario.add(comida);
-    });
-  }
-
-  void _removerComida(ComidaItem comida) {
-    setState(() {
-      _inventario.remove(comida);
-    });
-  }
-
-  void _onPageChanged(int index) {
-    setState(() {
-      _currentIndex = index;
-    });
-  }
-
-  void _onBottomNavTapped(int index) {
-    setState(() {
-      _currentIndex = index;
-    });
-    _pageController.animateToPage(
-      index,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeInOut,
-    );
+  void _onMascotaDurmiendoChanged(bool v) {
+    setState(() => _mascotaDurmiendo = v);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: PageView(
-        controller: _pageController,
-        onPageChanged: _onPageChanged,
-        children: [
-          MascotaPage(
-            monedas: _monedas,
-            onMonedasChanged: _actualizarMonedas,
-            inventario: _inventario,
-            onComidaUsada: _removerComida,
-            horaActual: _formatearHora(),
-            mascotaDurmiendo: _mascotaDurmiendo,
-            esHoraDormir: _esHoraDormir,
-          ),
-          TiendaPage(
-            monedas: _monedas,
-            onMonedasChanged: _actualizarMonedas,
-            onComidaComprada: _agregarComida,
-            horaActual: _formatearHora(),
-          ),
-          DormirPage(
-            monedas: _monedas,
-            onMonedasChanged: _actualizarMonedas,
-            horaActual: _formatearHora(),
-            mascotaDurmiendo: _mascotaDurmiendo,
-            onMascotaDurmiendoChanged: (durmiendo) {
-              setState(() {
-                _mascotaDurmiendo = durmiendo;
-              });
-            },
-          ),
-        ],
+    final pages = <Widget>[
+      MascotaPage(
+        monedas: _monedas,
+        onMonedasChanged: _onMonedasChanged,
+        inventario: _inventario,
+        onComidaUsada: _onComidaUsada,
+        horaActual: _horaActual,
+        mascotaDurmiendo: _mascotaDurmiendo,
+        esHoraDormir: _esHoraDormir,
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _currentIndex,
-        onTap: _onBottomNavTapped,
-        backgroundColor: Colors.purple,
-        selectedItemColor: Colors.white,
-        unselectedItemColor: Colors.white70,
-        type: BottomNavigationBarType.fixed,
-        items: [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.pets),
-            label: 'Mascota',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.shopping_cart),
-            label: 'Tienda',
-          ),
-          BottomNavigationBarItem(
-            icon: Stack(
-              children: [
-                Icon(Icons.bedtime),
-                if (_esHoraDormir)
-                  Positioned(
-                    right: 0,
-                    top: 0,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: Colors.yellow,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            label: 'Dormir',
-          ),
+      TiendaPage(
+        monedas: _monedas,
+        onMonedasChanged: _onMonedasChanged,
+        onComidaComprada: _onComidaComprada,
+        horaActual: _horaActual,
+      ),
+      DormirPage(
+        monedas: _monedas,
+        onMonedasChanged: _onMonedasChanged,
+        horaActual: _horaActual,
+        mascotaDurmiendo: _mascotaDurmiendo,
+        onMascotaDurmiendoChanged: _onMascotaDurmiendoChanged,
+      ),
+    ];
+
+    return Scaffold(
+      body: IndexedStack(index: _index, children: pages),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _index,
+        onDestinationSelected: (i) => setState(() => _index = i),
+        height: 64,
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.pets), label: 'Mascota'),
+          NavigationDestination(icon: Icon(Icons.store_mall_directory), label: 'Tienda'),
+          NavigationDestination(icon: Icon(Icons.nightlight_round), label: 'Dormir'),
         ],
+        indicatorColor: Colors.pink.shade200.withOpacity(0.3),
       ),
     );
+    // Nota: cada página incluye su propio Drawer (AppDrawer),
+    // por eso aquí no lo repetimos.
   }
 }

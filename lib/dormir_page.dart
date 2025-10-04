@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'widgets/app_drawer.dart';
 
 class DormirPage extends StatefulWidget {
   final int monedas;
@@ -24,234 +25,184 @@ class DormirPage extends StatefulWidget {
 class _DormirPageState extends State<DormirPage> with TickerProviderStateMixin {
   bool _estaDurmiendo = false;
   double _energia = 1.0;
-  Timer? _timerSueno;
-  Timer? _timerEnergiaPerdida;
-  
-  AnimationController? _respiracionController;
-  Animation<double>? _respiracionAnimacion;
-  
-  AnimationController? _zzController;
-  Animation<double>? _zzAnimacion;
-  
-  int _tiempoSueno = 0;
-  Timer? _timerTiempoSueno;
 
-  @override
-  void didUpdateWidget(DormirPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    
-    if (oldWidget.mascotaDurmiendo != widget.mascotaDurmiendo) {
-      setState(() {
-        _estaDurmiendo = widget.mascotaDurmiendo;
-      });
-      
-      if (widget.mascotaDurmiendo && _respiracionController != null && _zzController != null) {
-        _respiracionController!.repeat(reverse: true);
-        _zzController!.repeat(reverse: true);
-        
-        if (_timerSueno == null) {
-          _timerSueno = Timer.periodic(const Duration(seconds: 3), (timer) {
-            setState(() {
-              _energia = (_energia + 0.05).clamp(0.0, 1.0);
-              if (_tiempoSueno % 15 == 0 && _tiempoSueno > 0) {
-                widget.onMonedasChanged(widget.monedas + 2);
-              }
-            });
-          });
-        }
-        
-        if (_timerTiempoSueno == null) {
-          _timerTiempoSueno = Timer.periodic(const Duration(seconds: 1), (timer) {
-            setState(() {
-              _tiempoSueno++;
-            });
-          });
-        }
-      } else if (!widget.mascotaDurmiendo && _respiracionController != null && _zzController != null) {
-        _respiracionController!.stop();
-        _zzController!.stop();
-        _respiracionController!.reset();
-        _zzController!.reset();
-        
-        _timerSueno?.cancel();
-        _timerTiempoSueno?.cancel();
-        _timerSueno = null;
-        _timerTiempoSueno = null;
-        
-        setState(() {
-          _tiempoSueno = 0;
-        });
-      }
-    }
-  }
+  // Timers
+  Timer? _timerRecupera;     // + energía mientras duerme
+  Timer? _timerPierde;       // - energía mientras despierta
+  Timer? _timerContador;     // cronómetro de sueño
+  int _segundosDurmiendo = 0;
+
+  // Animaciones suaves
+  AnimationController? _respController;
+  Animation<double>? _respAnim;
+
+  // “Zzz…”
+  AnimationController? _zzController;
+  Animation<double>? _zzFade;
+  Animation<Offset>? _zzSlide;
 
   @override
   void initState() {
     super.initState();
-    _iniciarTimerEnergiaPerdida();
-    
     _estaDurmiendo = widget.mascotaDurmiendo;
-    
-    _respiracionController = AnimationController(
-      duration: const Duration(seconds: 2),
+
+    // Respiración de la mascota (levemente)
+    _respController = AnimationController(
       vsync: this,
+      duration: const Duration(milliseconds: 1500),
+      lowerBound: 0.0,
+      upperBound: 1.0,
+    )..addStatusListener((st) {
+        if (st == AnimationStatus.completed) _respController!.reverse();
+        if (st == AnimationStatus.dismissed) _respController!.forward();
+      });
+    _respAnim = Tween<double>(begin: 0.0, end: 6.0).animate(
+      CurvedAnimation(parent: _respController!, curve: Curves.easeInOut),
     );
-    _respiracionAnimacion = Tween<double>(begin: 1.0, end: 1.05).animate(
-      CurvedAnimation(parent: _respiracionController!, curve: Curves.easeInOut),
-    );
-    
+
+    // Zzz…
     _zzController = AnimationController(
-      duration: const Duration(seconds: 1),
       vsync: this,
+      duration: const Duration(milliseconds: 1600),
     );
-    _zzAnimacion = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _zzController!, curve: Curves.easeInOut),
-    );
-    
+    _zzFade = CurvedAnimation(parent: _zzController!, curve: Curves.easeOut);
+    _zzSlide = Tween<Offset>(begin: const Offset(0.12, 0.08), end: const Offset(0.12, -0.22))
+        .animate(CurvedAnimation(parent: _zzController!, curve: Curves.easeOut));
+
+    // Timers iniciales
     if (_estaDurmiendo) {
-      _respiracionController!.repeat(reverse: true);
-      _zzController!.repeat(reverse: true);
-      
-      _timerSueno = Timer.periodic(const Duration(seconds: 3), (timer) {
-        setState(() {
-          _energia = (_energia + 0.05).clamp(0.0, 1.0);
-          if (_tiempoSueno % 15 == 0 && _tiempoSueno > 0) {
-            widget.onMonedasChanged(widget.monedas + 2);
-          }
-        });
-      });
-      
-      _timerTiempoSueno = Timer.periodic(const Duration(seconds: 1), (timer) {
-        setState(() {
-          _tiempoSueno++;
-        });
-      });
+      _respController!.forward();
+      _zzController!.repeat();
+      _iniciarRecuperacion();
+    } else {
+      _iniciarPerdida();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant DormirPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.mascotaDurmiendo != widget.mascotaDurmiendo) {
+      _setDurmiendo(widget.mascotaDurmiendo);
     }
   }
 
   @override
   void dispose() {
-    _timerSueno?.cancel();
-    _timerEnergiaPerdida?.cancel();
-    _timerTiempoSueno?.cancel();
-    _respiracionController?.dispose();
+    _timerRecupera?.cancel();
+    _timerPierde?.cancel();
+    _timerContador?.cancel();
+    _respController?.dispose();
     _zzController?.dispose();
     super.dispose();
   }
 
-  void _iniciarTimerEnergiaPerdida() {
-    _timerEnergiaPerdida = Timer.periodic(const Duration(seconds: 45), (timer) {
-      if (!_estaDurmiendo) {
-        setState(() {
-          _energia = (_energia - 0.02).clamp(0.0, 1.0);
-        });
+  // ---- Timers ----
+  void _iniciarRecuperacion() {
+    _timerRecupera?.cancel();
+    _timerPierde?.cancel();
+    _timerContador?.cancel();
+
+    _timerRecupera = Timer.periodic(const Duration(seconds: 3), (_) {
+      setState(() => _energia = (_energia + 0.05).clamp(0.0, 1.0));
+      // Bonus: cada 15 s durmiendo, +2 monedas
+      if (_segundosDurmiendo > 0 && _segundosDurmiendo % 15 == 0) {
+        widget.onMonedasChanged(widget.monedas + 2);
       }
     });
-  }
 
-  void _iniciarSueno() {
-    setState(() {
-      _estaDurmiendo = true;
-      _tiempoSueno = 0;
-    });
-    
-    widget.onMascotaDurmiendoChanged(true);
-    
-    if (_respiracionController != null && _zzController != null) {
-      _respiracionController!.repeat(reverse: true);
-      _zzController!.repeat(reverse: true);
-    }
-    
-    _timerSueno?.cancel();
-    _timerTiempoSueno?.cancel();
-    
-    _timerSueno = Timer.periodic(const Duration(seconds: 3), (timer) {
-      setState(() {
-        _energia = (_energia + 0.05).clamp(0.0, 1.0);
-        if (_tiempoSueno % 15 == 0 && _tiempoSueno > 0) {
-          widget.onMonedasChanged(widget.monedas + 2);
-        }
-      });
-    });
-    
-    _timerTiempoSueno = Timer.periodic(const Duration(seconds: 1), (timer) {
-      setState(() {
-        _tiempoSueno++;
-      });
+    _timerContador = Timer.periodic(const Duration(seconds: 1), (_) {
+      setState(() => _segundosDurmiendo++);
     });
   }
 
-  void _despertarMascota() {
-    setState(() {
-      _estaDurmiendo = false;
-      _tiempoSueno = 0;
+  void _iniciarPerdida() {
+    _timerRecupera?.cancel();
+    _timerPierde?.cancel();
+    _timerContador?.cancel();
+    _segundosDurmiendo = 0;
+
+    // Pierde energía gradual cuando está despierta
+    _timerPierde = Timer.periodic(const Duration(minutes: 10), (_) {
+      setState(() => _energia = (_energia - 0.01).clamp(0.0, 1.0));
     });
-    
-    widget.onMascotaDurmiendoChanged(false);
-    
-    if (_respiracionController != null && _zzController != null) {
-      _respiracionController!.stop();
-      _zzController!.stop();
-      _respiracionController!.reset();
-      _zzController!.reset();
-    }
-    
-    _timerSueno?.cancel();
-    _timerTiempoSueno?.cancel();
-    _timerSueno = null;
-    _timerTiempoSueno = null;
   }
 
-  String _formatearTiempo(int segundos) {
-    int minutos = segundos ~/ 60;
-    int segs = segundos % 60;
-    return '${minutos.toString().padLeft(2, '0')}:${segs.toString().padLeft(2, '0')}';
-  }
+  // ---- Estado dormir/despertar ----
+  void _setDurmiendo(bool dormir) {
+    setState(() => _estaDurmiendo = dormir);
 
-  String _obtenerImagenMascota() {
-    if (_estaDurmiendo || widget.mascotaDurmiendo) {
-      return 'assets/images/mascota_durmiendo.png';
+    if (_estaDurmiendo) {
+      widget.onMascotaDurmiendoChanged(true);
+      _respController?.forward();
+      _zzController?.repeat();
+      _iniciarRecuperacion();
     } else {
-      return 'assets/images/mascota.png';
+      widget.onMascotaDurmiendoChanged(false);
+      _respController?.stop();
+      _zzController?.stop();
+      _zzController?.reset();
+      _iniciarPerdida();
     }
   }
+
+  void _toggleDormir() => _setDurmiendo(!_estaDurmiendo);
+
+  String _imgMascota() =>
+      _estaDurmiendo ? 'assets/images/mascota_durmiendo.png' : 'assets/images/mascota.png';
+
+  String _fmt(int s) => '${(s ~/ 60).toString().padLeft(2, '0')}:${(s % 60).toString().padLeft(2, '0')}';
 
   @override
   Widget build(BuildContext context) {
+    final awakeOverlay = [
+      Colors.pink.shade100.withOpacity(0.35),
+      Colors.pink.shade200.withOpacity(0.45),
+    ];
+    final sleepOverlay = [
+      Colors.black.withOpacity(0.55),
+      Colors.black.withOpacity(0.75),
+    ];
+
     return Scaffold(
+      drawer: AppDrawer(monedas: widget.monedas),
       appBar: AppBar(
-        backgroundColor: Colors.indigo,
+        backgroundColor: Colors.white,
+        elevation: 0,
+        titleSpacing: 16,
+        leading: Builder(
+          builder: (ctx) => IconButton(
+            icon: const Icon(Icons.menu, color: Colors.black87),
+            onPressed: () => Scaffold.of(ctx).openDrawer(),
+          ),
+        ),
         title: const Text(
-          'Dormitorio de Fluffy',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          'Dormitorio',
+          style: TextStyle(color: Colors.black87, fontWeight: FontWeight.w800),
         ),
         actions: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
             child: Row(
               children: [
-                Icon(Icons.access_time, color: Colors.white, size: 16),
+                const Icon(Icons.access_time, color: Colors.black87, size: 16),
                 const SizedBox(width: 4),
                 Text(
                   widget.horaActual,
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                    fontWeight: FontWeight.w700,
                     fontSize: 14,
                   ),
                 ),
                 const SizedBox(width: 16),
-                Image.asset(
-                  'assets/images/moneda.png',
-                  width: 20,
-                  height: 20,
-                ),
+                Image.asset('assets/images/moneda.png', width: 20, height: 20),
                 const SizedBox(width: 4),
                 Text(
                   '${widget.monedas}',
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                    fontWeight: FontWeight.w800,
                     fontSize: 16,
                   ),
                 ),
@@ -259,151 +210,62 @@ class _DormirPageState extends State<DormirPage> with TickerProviderStateMixin {
             ),
           ),
         ],
-        elevation: 0,
       ),
+
       body: Stack(
         children: [
-          Container(
-            decoration: BoxDecoration(
-              image: DecorationImage(
-                image: AssetImage('assets/images/dormitorio_fondo.png'),
-                fit: BoxFit.cover,
-              ),
+          // Fondo del dormitorio
+          Positioned.fill(
+            child: Image.asset(
+              'assets/images/dormitorio_fondo.png',
+              fit: BoxFit.cover,
             ),
           ),
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: _estaDurmiendo || widget.mascotaDurmiendo
-                    ? [
-                        Colors.indigo.shade900.withOpacity(0.7),
-                        Colors.purple.shade900.withOpacity(0.8)
-                      ]
-                    : [
-                        Colors.indigo.withOpacity(0.3),
-                        Colors.blue.withOpacity(0.5)
-                      ],
-                stops: const [0.0, 0.3],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              children: [
-                const SizedBox(height: 120),
-                const SizedBox(height: 100),
-                Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    AnimatedBuilder(
-                      animation: _respiracionAnimacion ?? const AlwaysStoppedAnimation(1.0),
-                      builder: (context, child) {
-                        return Transform.scale(
-                          scale: (_estaDurmiendo || widget.mascotaDurmiendo) 
-                              ? _respiracionAnimacion!.value 
-                              : 1.0,
-                          child: Container(
-                            width: 250,
-                            height: 250,
-                            padding: const EdgeInsets.all(25),
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(25),
-                              color: (_estaDurmiendo || widget.mascotaDurmiendo)
-                                  ? Colors.blue.withOpacity(0.1) 
-                                  : Colors.transparent,
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(17),
-                              child: Image.asset(
-                                _obtenerImagenMascota(),
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                    if (_estaDurmiendo || widget.mascotaDurmiendo)
-                      Positioned(
-                        top: 20,
-                        right: 30,
-                        child: AnimatedBuilder(
-                          animation: _zzAnimacion!,
-                          builder: (context, child) {
-                            return Opacity(
-                              opacity: _zzAnimacion!.value,
-                              child: Column(
-                                children: [
-                                  Text(
-                                    'Z',
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 30,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  Text(
-                                    'Z',
-                                    style: TextStyle(
-                                      color: Colors.white70,
-                                      fontSize: 25,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  Text(
-                                    'Z',
-                                    style: TextStyle(
-                                      color: Colors.white54,
-                                      fontSize: 20,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                  ],
+
+          // Overlay (rosa/oscuro)
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: _estaDurmiendo ? sleepOverlay : awakeOverlay,
                 ),
-                const SizedBox(height: 40),
-                Card(
-                  color: (_estaDurmiendo || widget.mascotaDurmiendo) 
-                      ? Colors.grey.shade800 
-                      : Colors.white,
+              ),
+            ),
+          ),
+
+          // Contenido
+          Column(
+            children: [
+              const SizedBox(height: 20),
+              // Cabecera de energía
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Card(
+                  elevation: 0,
+                  color: _estaDurmiendo ? Colors.black.withOpacity(.35) : Colors.white,
                   child: Padding(
-                    padding: const EdgeInsets.all(16.0),
+                    padding: const EdgeInsets.all(14),
                     child: Column(
                       children: [
                         Row(
                           children: [
-                            Icon(
-                              Icons.battery_charging_full, 
-                              color: (_estaDurmiendo || widget.mascotaDurmiendo) 
-                                  ? Colors.white 
-                                  : Colors.blue
-                            ),
+                            Icon(Icons.bedtime, color: _estaDurmiendo ? Colors.white : Colors.pink),
                             const SizedBox(width: 8),
                             Text(
-                              'Energía:', 
+                              'Energía',
                               style: TextStyle(
-                                fontSize: 16,
-                                color: (_estaDurmiendo || widget.mascotaDurmiendo) 
-                                    ? Colors.white 
-                                    : Colors.black,
+                                fontWeight: FontWeight.w700,
+                                color: _estaDurmiendo ? Colors.white : Colors.black87,
                               ),
                             ),
                             const Spacer(),
                             Text(
-                              '${(_energia * 100).round()}%', 
+                              '${(_energia * 100).round()}%',
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
-                                color: (_estaDurmiendo || widget.mascotaDurmiendo) 
-                                    ? Colors.white 
-                                    : Colors.black,
+                                color: _estaDurmiendo ? Colors.white : Colors.black87,
                               ),
                             ),
                           ],
@@ -411,86 +273,105 @@ class _DormirPageState extends State<DormirPage> with TickerProviderStateMixin {
                         const SizedBox(height: 8),
                         LinearProgressIndicator(
                           value: _energia,
-                          backgroundColor: Colors.grey[300],
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            _energia > 0.7 ? Colors.green : 
-                            _energia > 0.3 ? Colors.orange : Colors.red
-                          ),
                           minHeight: 8,
+                          backgroundColor: Colors.white.withOpacity(_estaDurmiendo ? .25 : .8),
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            _energia > .7 ? Colors.green : _energia > .3 ? Colors.orange : Colors.red,
+                          ),
                         ),
                       ],
                     ),
                   ),
                 ),
-                const SizedBox(height: 20),
-                if (_estaDurmiendo && _tiempoSueno > 0)
-                  Card(
-                    color: Colors.grey.shade800,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.access_time, color: Colors.white),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Durmiendo: ${_formatearTiempo(_tiempoSueno)}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
+              ),
+
+              const SizedBox(height: 24),
+
+              // Mascota
+              Expanded(
+                child: Center(
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      AnimatedBuilder(
+                        animation: _respAnim ?? const AlwaysStoppedAnimation(0),
+                        builder: (_, child) => Transform.translate(
+                          offset: Offset(0, _estaDurmiendo ? (_respAnim?.value ?? 0) : 0),
+                          child: SizedBox(
+                            width: 260,
+                            height: 260,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(24),
+                              child: Image.asset(_imgMascota(), fit: BoxFit.contain),
                             ),
                           ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ),
-                const SizedBox(height: 30),
-                Center(
-                  child: ElevatedButton.icon(
-                    onPressed: _estaDurmiendo ? _despertarMascota : _iniciarSueno,
-                    icon: Icon(
-                      _estaDurmiendo ? Icons.alarm : Icons.bedtime,
-                      color: Colors.white,
-                    ),
-                    label: Text(
-                      _estaDurmiendo ? 'Despertar' : 'Dormir',
-                      style: const TextStyle(
-                        color: Colors.white, 
-                        fontWeight: FontWeight.bold
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _estaDurmiendo ? Colors.orange : Colors.indigo,
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(25),
-                      ),
-                    ),
+
+                      // Zzz cuando duerme
+                      if (_estaDurmiendo)
+                        Positioned(
+                          top: -10,
+                          right: 30,
+                          child: FadeTransition(
+                            opacity: _zzFade!,
+                            child: SlideTransition(
+                              position: _zzSlide!,
+                              child: const Text(
+                                'Zzz…',
+                                style: TextStyle(
+                                  fontSize: 22,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 20),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: _estaDurmiendo 
-                        ? Colors.grey.shade800.withOpacity(0.5)
-                        : Colors.blue.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    _estaDurmiendo
-                        ? '💤 Fluffy está descansando y recuperando energía...\n+2 monedas cada 15 segundos'
-                        : '🛏️ Fluffy necesita dormir para recuperar energía.\n¡Un buen descanso da monedas extra!',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: _estaDurmiendo ? Colors.white70 : Colors.blue.shade700,
-                      fontSize: 14,
+              ),
+
+              // Cronómetro y botón
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                child: Column(
+                  children: [
+                    if (_estaDurmiendo && _segundosDurmiendo > 0)
+                      Text(
+                        'Durmiendo: ${_fmt(_segundosDurmiendo)}',
+                        style: const TextStyle(color: Colors.white70, fontWeight: FontWeight.w600),
+                      ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _estaDurmiendo ? Colors.black87 : Colors.pink,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+                        ),
+                        onPressed: _toggleDormir,
+                        icon: Icon(_estaDurmiendo ? Icons.wb_sunny_outlined : Icons.nightlight_round),
+                        label: Text(_estaDurmiendo ? 'Despertar' : 'Dormir'),
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 6),
+                    Text(
+                      _estaDurmiendo
+                          ? 'Recuperando energía… +5%/3s y +2 monedas/15s'
+                          : 'Despierta: pierde 1% cada 10 minutos',
+                      style: TextStyle(
+                        color: _estaDurmiendo ? Colors.white70 : Colors.pink.shade700,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ],
       ),
